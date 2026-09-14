@@ -1,0 +1,21 @@
+services:
+  # ── DearPyGui desktop GUI ────────────────────────────────────────────────────
+  # Run separately with: docker compose up gui
+  # Requires X11 on the host (Linux). On macOS use XQuartz, on Windows use VcXsrv.
+  gui:
+    build:
+      context: .
+      dockerfile: Dockerfile.gui
+    environment:
+      - DISPLAY=${DISPLAY}           # forward host display
+      - API_URL=http://localhost:8000
+      - API_TOKEN=${API_SECRET:-changeme}
+      - ORTHANC_URL=http://orthanc:8042
+    volumes:
+      - /tmp/.X11-unix:/tmp/.X11-unix:rw   # X11 socket
+    depends_on:
+      - api
+      - orthanc
+    network_mode: host   # simplest for X11 forwarding on Linux
+    profiles:
+      - gui   # only starts with: docker compose --profile gui up

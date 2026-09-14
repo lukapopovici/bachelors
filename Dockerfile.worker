@@ -1,0 +1,18 @@
+FROM python:3.11-slim
+
+COPY --from=ghcr.io/astral-sh/uv:0.11.8 /uv /uvx /bin/
+
+WORKDIR /src
+ENV PYTHONPATH=/src
+ENV PATH="/src/.venv/bin:$PATH"
+
+COPY pyproject.toml uv.lock ./
+RUN uv sync --locked --no-dev
+
+COPY alembic.ini ./
+COPY alembic/ ./alembic/
+COPY src/ ./src/
+RUN useradd --create-home --shell /usr/sbin/nologin appuser
+USER appuser
+
+CMD ["celery", "-A", "src.worker.celery_app", "worker", "--loglevel=info", "--concurrency=3"]

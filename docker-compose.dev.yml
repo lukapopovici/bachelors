@@ -1,0 +1,11 @@
+services:
+  api:
+    environment:
+      APP_ENV: development
+    command: ["uvicorn", "src.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
+    volumes:
+      - ./src:/src/src:ro
+
+  worker:
+    environment:
+      APP_ENV: development

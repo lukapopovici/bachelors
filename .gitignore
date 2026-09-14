@@ -1,0 +1,67 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+
+# Virtual environments and package metadata
+.venv/
+venv/
+env/
+ENV/
+.env/
+*.egg-info/
+.eggs/
+dist/
+build/
+pip-wheel-metadata/
+pytest_cache/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+
+# Local configuration and secrets
+.env
+.env.*
+!.env.example
+
+# IDE and OS files
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Local-only development checkouts and private test scripts
+app/
+pgvector/
+testing/
+
+# Logs and runtime files
+*.log
+*.pid
+*.sock
+celerybeat-schedule
+
+# Local databases and application data
+*.db
+*.sqlite
+*.sqlite3
+data/
+uploads/
+output/
+tmp/
+temp/
+
+# DICOM files and generated exports
+*.dcm
+*.dicom
+*.nii
+*.nii.gz
+*.zip
+
+# Test and benchmark output
+.benchmarks/

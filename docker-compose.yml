@@ -1,0 +1,140 @@
+services:
+
+  # ── One-shot database migration job ────────────────────────────────────
+  migrate:
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+    environment:
+      APP_ENV: ${APP_ENV:-development}
+      API_SECRET: ${API_SECRET:-changeme}
+      JWT_SECRET: ${JWT_SECRET:-changeme}
+      DATABASE_URL: ${DATABASE_URL:-postgresql://msvmed:msvmed@postgres:5432/msvmed}
+    command: ["python", "-m", "src.migrate"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
+  # ── FastAPI app ──────────────────────────────────────────────────────────
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+    ports:
+      - "8000:8000"
+    environment:
+      APP_ENV: ${APP_ENV:-development}
+      API_SECRET: ${API_SECRET:-changeme}
+      JWT_SECRET: ${JWT_SECRET:-changeme}
+      JWT_EXPIRE_MINUTES: ${JWT_EXPIRE_MINUTES:-60}
+      ADMIN_USERNAME: ${ADMIN_USERNAME:-admin}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-admin123}
+      ORTHANC_URL: ${ORTHANC_URL:-http://orthanc:8042}
+      ORTHANC_USER: ${ORTHANC_USER:-orthanc}
+      ORTHANC_PASS: ${ORTHANC_PASS:-orthanc}
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
+      DATABASE_URL: ${DATABASE_URL:-postgresql://msvmed:msvmed@postgres:5432/msvmed}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
+      orthanc:
+        condition: service_started
+      migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health/live')"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  # ── Celery worker for DICOM uploads ─────────────────────────────────────
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile.worker
+    environment:
+      APP_ENV: ${APP_ENV:-development}
+      API_SECRET: ${API_SECRET:-changeme}
+      JWT_SECRET: ${JWT_SECRET:-changeme}
+      JWT_EXPIRE_MINUTES: ${JWT_EXPIRE_MINUTES:-60}
+      ADMIN_USERNAME: ${ADMIN_USERNAME:-admin}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-admin123}
+      ORTHANC_URL: ${ORTHANC_URL:-http://orthanc:8042}
+      ORTHANC_USER: ${ORTHANC_USER:-orthanc}
+      ORTHANC_PASS: ${ORTHANC_PASS:-orthanc}
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
+      DATABASE_URL: ${DATABASE_URL:-postgresql://msvmed:msvmed@postgres:5432/msvmed}
+    command: ["celery", "-A", "src.worker.celery_app", "worker", "--loglevel=info", "--queues=dicom", "--concurrency=1"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
+      orthanc:
+        condition: service_started
+      migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD-SHELL", "celery -A src.worker inspect ping --timeout=2 >/dev/null"]
+      interval: 30s
+      timeout: 8s
+      retries: 3
+    restart: unless-stopped
+
+  # ── Celery worker for PACS forwarding ────────────────────────────────────
+  worker-forward:
+    extends:
+      service: worker
+    command: ["celery", "-A", "src.worker.celery_app", "worker", "--loglevel=info", "--queues=forward", "--concurrency=1"]
+
+  # ── Celery worker for UI/demo jobs ───────────────────────────────────────
+  worker-demo:
+    extends:
+      service: worker
+    command: ["celery", "-A", "src.worker.celery_app", "worker", "--loglevel=info", "--queues=demo", "--concurrency=1"]
+
+  # ── PostgreSQL + pgvector ────────────────────────────────────────────────
+  postgres:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_DB: msvmed
+      POSTGRES_USER: msvmed
+      POSTGRES_PASSWORD: msvmed
+    ports:
+      - "5433:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./docker/initdb:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U msvmed -d msvmed"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  # ── Redis (broker + result backend) ─────────────────────────────────────
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    restart: unless-stopped
+
+  # ── Orthanc (local PACS for dev/staging) ────────────────────────────────
+  orthanc:
+    image: orthancteam/orthanc:latest
+    user: "0:0"
+    ports:
+      - "8042:8042"   # HTTP API
+      - "4242:4242"   # DICOM port
+    volumes:
+      - orthanc_data:/var/lib/orthanc/db
+      - ./orthanc.json:/etc/orthanc/orthanc.json:ro,z
+    restart: unless-stopped
+
+volumes:
+  orthanc_data:
+  postgres_data:

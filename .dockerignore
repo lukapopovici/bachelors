@@ -1,0 +1,13 @@
+.git
+.gitignore
+.env
+.venv
+__pycache__
+*.py[cod]
+*.log
+pgvector
+testing
+data
+uploads
+output
+tmp
