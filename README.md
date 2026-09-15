@@ -43,21 +43,49 @@ MSV-med is a FastAPI service for working with DICOM studies in Orthanc. It inclu
 ---
 
 ## Architecture
+```mermaid
+flowchart TD
+    Client(["Client\ngui.py · Swagger · curl"])
 
-```text
-GUI or client
-  |
-  v
-FastAPI API -- PostgreSQL/pgvector (metadata and embeddings)
-  |
-  +---------- Redis (Celery broker and result backend)
-  |
-  +---------- Orthanc (DICOM storage and PACS REST API)
-  |
-  +---------- Celery queues:
-         dicom   -> upload processing
-         forward -> PACS forwarding
-         demo    -> UI/demo jobs
+    subgraph API ["FastAPI — api:8000"]
+        Auth["JWT Auth\n+ Rate Limiting"]
+        Router["Routers\n/api/v1/studies\n/api/v1/jobs\n/api/v1/query\n/api/v1/admin"]
+        Health["Health\n/health · /metrics"]
+        Auth --> Router
+    end
+
+    subgraph Queues ["Celery Workers"]
+        W1["worker\nDICOM upload"]
+        W2["worker-forward\nPACS forwarding"]
+        W3["worker-demo\ndemo jobs"]
+    end
+
+    subgraph Storage ["Storage"]
+        PG[("PostgreSQL\nmetadata · jobs\nembeddings · audit")]
+        RD[("Redis\nbroker · rate limits\njob results")]
+    end
+
+    subgraph PACS ["Orthanc — orthanc:8042"]
+        ORT["DICOM Storage\nREST API · port 4242"]
+    end
+
+    Client -->|"HTTPS + Bearer / JWT"| Auth
+    Router -->|"enqueue job"| RD
+    Router -->|"read metadata"| PG
+    Router -->|"GET studies / instances"| ORT
+    RD -->|"pull task"| W1
+    RD -->|"pull task"| W2
+    RD -->|"pull task"| W3
+    W1 -->|"POST /instances"| ORT
+    W2 -->|"POST /instances"| ORT
+    W1 -->|"update job · save failed"| PG
+    W2 -->|"update job · save failed"| PG
+    Router -->|"results"| Client
+
+    style API fill:#1e3a5f,color:#fff,stroke:#3b82f6
+    style Queues fill:#3b1f5e,color:#fff,stroke:#8b5cf6
+    style Storage fill:#1a3a2a,color:#fff,stroke:#10b981
+    style PACS fill:#3a2a1a,color:#fff,stroke:#f59e0b
 ```
 
 The normal flow is:
@@ -111,6 +139,41 @@ The first indexing request downloads or initializes the `all-MiniLM-L6-v2` embed
 Uploads require valid DICOM files with SOP Instance, Study Instance, and Series Instance UIDs. When anonymization is enabled, identifying tags and private tags are removed and UIDs are remapped consistently across the job. The current anonymization is intended for controlled development and staging workflows; validate it against your organization's approved DICOM confidentiality profile before using it with clinical data in production.
 
 ---
+## Relevant Implementations
+
+### Sliding window rate limiting 
+
+Implemented as an atomic Lua script executed inside Redis. Each request's timestamp is stored in a sorted set; on every incoming request, entries older than the window are pruned and the remaining count checked before the request is admitted. Running this logic as a single Lua script prevents race conditions where two concurrent requests could both read a count below the limit and both be allowed through.
+Clients are identified by a hash of their token, or by IP address if no token is present, and limits are tracked independently per endpoint.
+
+ Request 1 — allowed
+```python
+allowed, remaining = rate_limit("ratelimit:/api/v1/studies:abc123", max_requests=10, window_seconds=60)
+# (True, 9)
+```
+ Request 11 — rejected
+```python
+allowed, remaining = rate_limit("ratelimit:/api/v1/studies:abc123", max_requests=10, window_seconds=60)
+# (False, 0)
+```
+ FastAPI raises:
+ ```python
+HTTP 429 Too Many Requests
+Retry-After: 60
+{"detail": "Rate limit exceeded"}
+```
+
+Redis sorted set at the point of rejection
+ ```python
+ZRANGE ratelimit:/api/v1/studies:abc123 0 -1 WITHSCORES
+
+1) "a1b2c3..."   1720310400123   <- request 1, timestamp ms
+2) "d4e5f6..."   1720310400891   <- request 2
+...
+10) "z9y8x7..."  1720310405999   <- request 10
+
+```
+after 60s all entries expire and the window resets
 
 ## DICOM Integration, Privacy, and Security
 
